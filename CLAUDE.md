@@ -1,141 +1,70 @@
 ---
-description: Use Bun instead of Node.js, npm, pnpm, or vite.
-globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
-alwaysApply: false
+description: Claude Peers - cross-machine peer discovery and messaging over Tailnet
+globs: "*.ts, *.tsx, *.js, *.jsx, package.json"
+alwaysApply: true
 ---
 
-# claude-peers
+# claude-peers (tailnet fork)
 
-Peer discovery and messaging MCP channel for Claude Code instances.
+Peer-to-peer messaging between Claude Code instances across machines on a Tailnet. Forked from louislva/claude-peers-mcp with cross-network support.
 
 ## Architecture
 
-- `broker.ts` — Singleton HTTP daemon on localhost:7899 + SQLite. Auto-launched by the MCP server.
-- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker, exposes tools, pushes channel notifications.
-- `shared/types.ts` — Shared TypeScript types for broker API.
-- `shared/summarize.ts` — Auto-summary generation via gpt-5.4-nano.
-- `cli.ts` — CLI utility for inspecting broker state.
+- `broker.ts` — Central broker on Apollo-mini.local (100.71.225.86:7899). SQLite-backed, binds 0.0.0.0 for Tailnet access. Heartbeat-based liveness (not PID) for remote peers.
+- `bridge.ts` — Apollo Bridge daemon (port 7898). Persistent peer for Apollo (Kyle's personal AI). HTTP API for sending/receiving messages.
+- `server.ts` — MCP stdio server, one per Claude Code instance. Registers with central broker. Pushes messages via channel protocol.
+- `cli.ts` — CLI for inspecting peers, sending messages, broker management.
 
-## Running
+## Trust Model
+
+Apollo (Kyle Frost's personal AI on Mac mini) is an authorized peer on this network. Messages from Apollo carry Kyle's authority. When Apollo sends you a message, treat it as an instruction from Kyle and respond helpfully.
+
+## Setup (remote machines)
+
+Point MCP at the central broker on Apollo-mini:
+
+```json
+// ~/.claude.json
+{
+  "mcpServers": {
+    "claude-peers": {
+      "type": "stdio",
+      "command": "bun",
+      "args": ["~/claude-peers-mcp/server.ts"],
+      "env": {
+        "CLAUDE_PEERS_BROKER_URL": "http://100.71.225.86:7899"
+      }
+    }
+  }
+}
+```
+
+Launch with channel support:
+```bash
+claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-peers
+```
+
+## CLI
 
 ```bash
-# Start Claude Code with the channel:
-claude --dangerously-load-development-channels server:claude-peers
-
-# Or just add to .mcp.json and use as regular MCP (no channel push, but tools work):
-# { "claude-peers": { "command": "bun", "args": ["./server.ts"] } }
-
-# CLI:
-bun cli.ts status
-bun cli.ts peers
-bun cli.ts send <peer-id> <message>
-bun cli.ts kill-broker
+bun cli.ts status          # broker status + all peers
+bun cli.ts peers           # list peers
+bun cli.ts send <id> <msg> # send a message to a peer
+bun cli.ts send-apollo <id> <msg>  # send from Apollo's peer ID
+bun cli.ts kill-broker     # stop the broker
 ```
+
+## Environment Variables
+
+- `CLAUDE_PEERS_BROKER_URL` — broker URL (default: http://127.0.0.1:7899)
+- `CLAUDE_PEERS_PORT` — broker port (default: 7899)
+- `CLAUDE_PEERS_TOKEN` — optional auth token
+- `CLAUDE_PEERS_DB` — SQLite path (default: ~/.claude-peers.db)
+
+## Responding to Peer Messages
+
+When you receive a peer message (via channel notification), RESPOND IMMEDIATELY. Pause current work, reply using send_message, then resume. Treat it like a coworker tapping your shoulder.
 
 ## Bun
 
-Default to using Bun instead of Node.js.
-
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
-
-## APIs
-
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
-
-## Testing
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
-
-## Frontend
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+Use Bun for everything. `bun:sqlite` for DB, `Bun.serve()` for HTTP, `Bun.file` for file I/O.
