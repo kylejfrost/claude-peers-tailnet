@@ -8,6 +8,7 @@ export interface Peer {
   git_root: string | null;
   tty: string | null;
   summary: string;
+  hostname: string; // machine name for cross-network identification
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
 }
@@ -29,6 +30,7 @@ export interface RegisterRequest {
   git_root: string | null;
   tty: string | null;
   summary: string;
+  hostname?: string; // machine name, auto-detected if omitted
 }
 
 export interface RegisterResponse {

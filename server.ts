@@ -31,11 +31,14 @@ import {
   getGitBranch,
   getRecentFiles,
 } from "./shared/summarize.ts";
+import { hostname as osHostname } from "os";
 
 // --- Configuration ---
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
-const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
+const BROKER_URL = process.env.CLAUDE_PEERS_BROKER_URL ?? `http://127.0.0.1:${BROKER_PORT}`;
+const AUTH_TOKEN = process.env.CLAUDE_PEERS_TOKEN ?? "";
+const MY_HOSTNAME = osHostname();
 const POLL_INTERVAL_MS = 1000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const BROKER_SCRIPT = new URL("./broker.ts", import.meta.url).pathname;
@@ -43,9 +46,11 @@ const BROKER_SCRIPT = new URL("./broker.ts", import.meta.url).pathname;
 // --- Broker communication ---
 
 async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (AUTH_TOKEN) headers["Authorization"] = `Bearer ${AUTH_TOKEN}`;
   const res = await fetch(`${BROKER_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -57,7 +62,7 @@ async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
 
 async function isBrokerAlive(): Promise<boolean> {
   try {
-    const res = await fetch(`${BROKER_URL}/health`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${BROKER_URL}/health`, { signal: AbortSignal.timeout(3000) });
     return res.ok;
   } catch {
     return false;
@@ -70,17 +75,17 @@ async function ensureBroker(): Promise<void> {
     return;
   }
 
+  // If using a remote broker URL, don't try to spawn locally
+  if (process.env.CLAUDE_PEERS_BROKER_URL) {
+    throw new Error(`Remote broker at ${BROKER_URL} is not reachable`);
+  }
+
   log("Starting broker daemon...");
   const proc = Bun.spawn(["bun", BROKER_SCRIPT], {
     stdio: ["ignore", "ignore", "inherit"],
-    // Detach so the broker survives if this MCP server exits
-    // On macOS/Linux, the broker will keep running
   });
-
-  // Unref so this process can exit without waiting for the broker
   proc.unref();
 
-  // Wait for it to come up
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 200));
     if (await isBrokerAlive()) {
@@ -263,6 +268,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const lines = peers.map((p) => {
           const parts = [
             `ID: ${p.id}`,
+            `Host: ${p.hostname || "local"}`,
             `PID: ${p.pid}`,
             `CWD: ${p.cwd}`,
           ];
@@ -494,6 +500,7 @@ async function main() {
     git_root: myGitRoot,
     tty,
     summary: initialSummary,
+    hostname: MY_HOSTNAME,
   });
   myId = reg.id;
   log(`Registered as peer ${myId}`);
