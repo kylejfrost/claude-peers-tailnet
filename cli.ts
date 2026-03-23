@@ -12,7 +12,9 @@
  */
 
 const BROKER_PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
-const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
+const BROKER_URL = process.env.CLAUDE_PEERS_BROKER_URL ?? `http://127.0.0.1:${BROKER_PORT}`;
+const HOME = process.env.HOME ?? "/Users/apollo";
+const STATE_FILE = `${HOME}/clawd/tools/claude-peers/.bridge-state.json`;
 
 async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {
   const opts: RequestInit = body
@@ -150,12 +152,49 @@ switch (cmd) {
     break;
   }
 
+  case "send-apollo": {
+    const toId = process.argv[3];
+    const msg = process.argv.slice(4).join(" ");
+    if (!toId || !msg) {
+      console.error("Usage: bun cli.ts send-apollo <peer-id> <message>");
+      process.exit(1);
+    }
+    // Read Apollo's registered peer ID from state file
+    let apolloId = "apollo-bridge";
+    try {
+      const state = JSON.parse(await Bun.file(STATE_FILE).text()) as { id: string };
+      apolloId = state.id;
+    } catch {
+      console.error(`Warning: could not read state file ${STATE_FILE}, using 'apollo-bridge' as from_id`);
+    }
+    try {
+      const result = await brokerFetch<{ ok: boolean; error?: string }>("/send-message", {
+        from_id: apolloId,
+        to_id: toId,
+        text: msg,
+      });
+      if (result.ok) {
+        console.log(`Message sent from Apollo (${apolloId}) to ${toId}`);
+      } else {
+        console.error(`Failed: ${result.error}`);
+      }
+    } catch (e) {
+      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    break;
+  }
+
   default:
     console.log(`claude-peers CLI
 
 Usage:
-  bun cli.ts status          Show broker status and all peers
-  bun cli.ts peers           List all peers
-  bun cli.ts send <id> <msg> Send a message to a peer
-  bun cli.ts kill-broker     Stop the broker daemon`);
+  bun cli.ts status                  Show broker status and all peers
+  bun cli.ts peers                   List all peers
+  bun cli.ts send <id> <msg>         Send a message to a peer
+  bun cli.ts send-apollo <id> <msg>  Send from Apollo's registered peer ID
+  bun cli.ts kill-broker             Stop the broker daemon
+
+Environment:
+  CLAUDE_PEERS_BROKER_URL  Broker URL (default: http://127.0.0.1:7899)
+  CLAUDE_PEERS_PORT        Broker port (default: 7899)`);
 }
