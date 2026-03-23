@@ -97,6 +97,34 @@ async function register(): Promise<void> {
 
 // --- Polling ---
 
+async function notifyOpenClaw(from_id: string, text: string): Promise<void> {
+  try {
+    // Look up peer info for context
+    let peerInfo = "";
+    try {
+      const peers = await brokerFetch<Peer[]>("/list-peers", {
+        scope: "machine",
+        cwd: BASE_DIR,
+        git_root: null,
+      });
+      const sender = peers.find(p => p.id === from_id);
+      if (sender) {
+        peerInfo = ` (${sender.hostname}:${sender.cwd})`;
+      }
+    } catch {}
+
+    const eventText = `Claude Code peer ${from_id}${peerInfo} replied: ${text}`;
+    const proc = Bun.spawn(["openclaw", "system", "event", "--text", eventText, "--mode", "now"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await proc.exited;
+    log(`Notified OpenClaw about message from ${from_id}`);
+  } catch (e) {
+    log(`OpenClaw notify failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 async function pollMessages(): Promise<void> {
   if (!myId) return;
   try {
@@ -115,9 +143,11 @@ async function pollMessages(): Promise<void> {
         text: msg.text,
         sent_at: msg.sent_at,
       });
+
+      // Notify OpenClaw so Apollo can relay to Kyle
+      await notifyOpenClaw(msg.from_id, msg.text);
     }
   } catch (e) {
-    // Non-critical, broker may be temporarily unreachable
     log(`Poll error: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
